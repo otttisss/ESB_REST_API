@@ -1,5 +1,89 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
-<mule xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
-	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-	xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd"></mule>
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:jms="http://www.mulesoft.org/schema/mule/jms"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/jms http://www.mulesoft.org/schema/mule/jms/current/mule-jms.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+	<db:config name="Database_Config" doc:name="Database Config" doc:id="ff92afac-4010-4ae9-9b68-0acc67c35e4a" >
+		<db:generic-connection url="jdbc:postgresql://localhost:5432/orders_db" driverClassName="org.postgresql.Driver" user="postgres" password="1234" />
+	</db:config>
+	<jms:config name="JMS_Config" doc:name="JMS Config" doc:id="a8b48501-892b-4d91-b728-51ac10ce85fd" >
+		<jms:active-mq-connection username="admin" password="admin" />
+	</jms:config>
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="ec14eba8-1785-48f1-bc7c-8eea810e886a">
+		<http:listener-connection host="0.0.0.0" port="8081" />
+	</http:listener-config>
+	<flow name="postOrder_Flow" doc:id="be6c858a-9957-4a0c-a332-9b3d915ff065" >
+		<http:listener doc:name="Listener" doc:id="13a8a3bf-aff7-4b27-9413-d09e628eacfe" config-ref="HTTP_Listener_config" path="/orders" allowedMethods="POST"/>
+		<ee:transform doc:name="Transform Message" doc:id="dd25019f-acad-4218-939f-2bcc19f7f347">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+{
+  client_name: payload.client_name,
+  amount: payload.amount,
+  status: payload.status
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+<db:insert doc:name="InsertValues" doc:id="5120941b-0acc-455b-940a-728b0db5adff" config-ref="Database_Config">
+    <db:sql><![CDATA[
+        INSERT INTO orders (client_name, amount, status)
+        VALUES (:client_name, :amount, :status);
+    ]]></db:sql>
+    <db:input-parameters>
+        #[{
+            "client_name": payload.client_name,
+            "amount": payload.amount,
+            "status": payload.status
+        }]
+    </db:input-parameters>
+</db:insert>
+	</flow>
+	
+	
+<flow name="getOrderFlow">
+    <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}" doc:name="Listener"/>
+    <db:select config-ref="Database_Config" doc:name="Get Order from DB">
+        <db:sql>SELECT * FROM orders WHERE id = :id</db:sql>
+        <db:input-parameters>#[{'id': attributes.uriParams.id}]</db:input-parameters>
+    </db:select>
+    <choice>
+        <when expression="#[payload.isEmpty()]">
+            <raise-error type="ORDER:NOT_FOUND" description="Order not found" doc:name="Raise Error"/>
+        </when>
+        <otherwise>
+            <set-payload value="#[payload[0]]" doc:name="Set Payload"/>
+        </otherwise>
+    </choice>
+</flow>
+
+<flow name="updateOrderStatusFlow">
+    <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}/status" method="PUT"/>
+    <db:update config-ref="Database_Config" doc:name="Update Order Status">
+        <db:sql>UPDATE orders SET status = :status WHERE id = :id</db:sql>
+        <db:input-parameters>#[{'id': attributes.uriParams.id, 'status': payload.status}]</db:input-parameters>
+    </db:update>
+    <jms:publish config-ref="JMS_Config" doc:name="Publish to ActiveMQ" destination="statusQueue">
+        <jms:message>#[{'orderId': attributes.uriParams.id, 'status': payload.status}]</jms:message>
+    </jms:publish>
+    <set-payload value="#[{'message': 'Order status updated'}]" doc:name="Set Payload"/>
+</flow>
+
+<flow name="deleteOrderFlow">
+    <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}" method="DELETE"/>
+    <db:delete config-ref="Database_Config" doc:name="Delete Order">
+        <db:sql>DELETE FROM orders WHERE id = :id</db:sql>
+        <db:input-parameters>#[{'id': attributes.uriParams.id}]</db:input-parameters>
+    </db:delete>
+    <http:response statusCode="204" doc:name="HTTP 204"/>
+</flow>
+
+
+
+
+</mule>
