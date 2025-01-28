@@ -63,27 +63,27 @@ output application/java
 </flow>
 
 <flow name="updateOrderStatusFlow">
-    <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}/status" method="PUT"/>
+    <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}/status" allowedMethods="PUT"/>
     <db:update config-ref="Database_Config" doc:name="Update Order Status">
         <db:sql>UPDATE orders SET status = :status WHERE id = :id</db:sql>
         <db:input-parameters>#[{'id': attributes.uriParams.id, 'status': payload.status}]</db:input-parameters>
     </db:update>
     <jms:publish config-ref="JMS_Config" doc:name="Publish to ActiveMQ" destination="statusQueue">
-        <jms:message>#[{'orderId': attributes.uriParams.id, 'status': payload.status}]</jms:message>
+        <jms:message>
+            <jms:body><![CDATA[#[{'orderId': attributes.uriParams.id, 'status': payload.status}]]]></jms:body>
+        </jms:message>
     </jms:publish>
     <set-payload value="#[{'message': 'Order status updated'}]" doc:name="Set Payload"/>
 </flow>
 
+
 <flow name="deleteOrderFlow">
-    <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}" method="DELETE"/>
+    <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}" allowedMethods="DELETE"/>
     <db:delete config-ref="Database_Config" doc:name="Delete Order">
         <db:sql>DELETE FROM orders WHERE id = :id</db:sql>
         <db:input-parameters>#[{'id': attributes.uriParams.id}]</db:input-parameters>
     </db:delete>
-    <http:response statusCode="204" doc:name="HTTP 204"/>
 </flow>
-
-
 
 
 </mule>
