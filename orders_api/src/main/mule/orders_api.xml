@@ -48,26 +48,37 @@ output application/java
 	
 <flow name="getOrderFlow">
     <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}" doc:name="Listener"/>
+    
     <db:select config-ref="Database_Config" doc:name="Get Order from DB">
         <db:sql>SELECT * FROM orders WHERE id = :id</db:sql>
-        <db:input-parameters>#[{'id': attributes.uriParams.id}]</db:input-parameters>
+                <db:input-parameters>
+            #[{
+                id: attributes.uriParams.id
+            }]
+        </db:input-parameters>
     </db:select>
-    <choice>
-        <when expression="#[payload.isEmpty()]">
-            <raise-error type="ORDER:NOT_FOUND" description="Order not found" doc:name="Raise Error"/>
+
+    <!-- Проверяем, пустой ли payload -->
+    <choice doc:name="Check if Order Exists">
+        <when expression="#[payload == null]">
+            <set-payload value="#[{ 'error': 'Order not found' }]" doc:name="Set Not Found Response"/>
+            <set-variable variableName="httpStatus" value="404" doc:name="Set 404 Status Variable"/>
         </when>
         <otherwise>
             <set-payload value="#[payload[0]]" doc:name="Set Payload"/>
+            <set-variable variableName="httpStatus" value="200" doc:name="Set 200 Status Variable"/>
         </otherwise>
     </choice>
 </flow>
 
+
+
 <flow name="updateOrderStatusFlow">
     <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}/status" allowedMethods="PUT"/>
     <db:update config-ref="Database_Config" doc:name="Update Order Status">
-        <db:sql>UPDATE orders SET status = :status WHERE id = :id</db:sql>
-        <db:input-parameters>#[{'id': attributes.uriParams.id, 'status': payload.status}]</db:input-parameters>
-    </db:update>
+    <db:sql>UPDATE orders SET status = :status WHERE id = :id</db:sql>
+    <db:input-parameters>#[{'id': attributes.uriParams.id, 'status': attributes.queryParams.status}]</db:input-parameters>
+</db:update>
     <jms:publish config-ref="JMS_Config" doc:name="Publish to ActiveMQ" destination="statusQueue">
         <jms:message>
             <jms:body><![CDATA[#[{'orderId': attributes.uriParams.id, 'status': payload.status}]]]></jms:body>
@@ -81,9 +92,40 @@ output application/java
     <http:listener config-ref="HTTP_Listener_config" path="/orders/{id}" allowedMethods="DELETE"/>
     <db:delete config-ref="Database_Config" doc:name="Delete Order">
         <db:sql>DELETE FROM orders WHERE id = :id</db:sql>
-        <db:input-parameters>#[{'id': attributes.uriParams.id}]</db:input-parameters>
+        <db:input-parameters>
+            #[{
+                id: attributes.uriParams.id
+            }]
+        </db:input-parameters>
     </db:delete>
 </flow>
+
+
+<flow name="processActiveMQMessagesFlow">
+    <jms:listener config-ref="JMS_Config" destination="orders.queue" doc:name="JMS Listener"/>
+    <logger level="INFO" message="#['Received message: ' ++ payload]" doc:name="Log Message"/>
+    <error-handler>
+        <on-error-continue type="JMS:CONNECTIVITY">
+            <jms:publish config-ref="JMS_Config" destination="DLQ" doc:name="Publish to DLQ">
+                <jms:message>
+                	<jms:body>#[payload]</jms:body>
+                </jms:message>
+            </jms:publish>
+        </on-error-continue>
+    </error-handler>
+</flow>
+
+<error-handler name="globalErrorHandler">
+    <on-error-continue type="HTTP:BAD_REQUEST">
+        <set-payload value="#[{'error': 'Invalid data', 'details': error.description}]" doc:name="Set Payload"/>
+        <!-- <http:response-builder status="400" contentType="text/xhtml" doc:name="HTTP 400"/> -->
+    </on-error-continue>
+    <on-error-continue type="HTTP:INTERNAL_SERVER_ERROR">
+        <logger level="ERROR" message="#['Server error: ' ++ error.description]" doc:name="Log Error"/>
+        <set-payload value="#[{'error': 'Internal server error'}]" doc:name="Set Payload"/>
+        <!-- <http:response-builder status="500" contentType="text/xhtml" doc:name="HTTP 500"/> -->
+    </on-error-continue>
+</error-handler>
 
 
 </mule>
